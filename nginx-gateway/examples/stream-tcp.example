@@ -1,0 +1,9 @@
+# TCP stream proxy example
+
+sudo ./gateway.sh stream-tcp \
+  --name mysql-prod \
+  --listen 33060 \
+  --backend 10.10.10.20:3306
+
+# Effect:
+# client -> Nginx:33060 -> 10.10.10.20:3306
