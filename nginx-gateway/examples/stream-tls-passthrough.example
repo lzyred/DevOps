@@ -1,0 +1,15 @@
+# TLS passthrough SNI router example
+
+sudo ./gateway.sh stream-tls-pass \
+  --name tls-router \
+  --listen 443 \
+  --default-backend 10.10.10.10:443 \
+  --map git.example.com=10.10.10.21:443,registry.example.com=10.10.10.22:443
+
+# Effect:
+# git.example.com       -> Nginx:443 -> 10.10.10.21:443
+# registry.example.com  -> Nginx:443 -> 10.10.10.22:443
+# unknown SNI           -> Nginx:443 -> 10.10.10.10:443
+
+# In this mode, Nginx does not decrypt TLS and does not use local certificates.
+# Backend services must own their own certificates.
