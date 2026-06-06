@@ -43,22 +43,7 @@ nginx_stream_tcp_create() {
 
   log "Creating TCP stream proxy: 0.0.0.0:${listen_port} -> ${backend}"
 
-  {
-    echo "upstream ${safe_name}_tcp_backend {"
-    echo "    server ${backend};"
-    echo "}"
-    echo
-    echo "server {"
-    echo "    listen ${listen_port};"
-    echo
-    echo "    proxy_connect_timeout 5s;"
-    echo "    proxy_timeout 1h;"
-    echo
-    echo "    proxy_pass ${safe_name}_tcp_backend;"
-    echo "}"
-  } > "${conf}"
-
-  reload_nginx
+  nginx_stream_render_tcp "${safe_name}" "${listen_port}" "${backend}" | safe_apply_nginx_conf "${conf}"
 }
 
 nginx_stream_udp_create() {
@@ -104,22 +89,7 @@ nginx_stream_udp_create() {
 
   log "Creating UDP stream proxy: 0.0.0.0:${listen_port}/udp -> ${backend}"
 
-  {
-    echo "upstream ${safe_name}_udp_backend {"
-    echo "    server ${backend};"
-    echo "}"
-    echo
-    echo "server {"
-    echo "    listen ${listen_port} udp;"
-    echo
-    echo "    proxy_timeout 30s;"
-    echo "    proxy_responses 1;"
-    echo
-    echo "    proxy_pass ${safe_name}_udp_backend;"
-    echo "}"
-  } > "${conf}"
-
-  reload_nginx
+  nginx_stream_render_udp "${safe_name}" "${listen_port}" "${backend}" | safe_apply_nginx_conf "${conf}"
 }
 
 nginx_stream_tls_passthrough_create() {
@@ -171,34 +141,84 @@ nginx_stream_tls_passthrough_create() {
 
   log "Creating TLS passthrough SNI router on port ${listen_port}"
 
-  {
-    echo "map \$ssl_preread_server_name \$${safe_name}_backend {"
-    echo "    default ${default_backend};"
+  nginx_stream_render_tls_passthrough "${safe_name}" "${listen_port}" "${default_backend}" "${map_items}" | safe_apply_nginx_conf "${conf}"
+}
 
-    IFS=',' read -ra pairs <<< "${map_items}"
-    for pair in "${pairs[@]}"; do
-      local sni="${pair%%=*}"
-      local target="${pair#*=}"
+nginx_stream_render_tcp() {
+  local safe_name="$1"
+  local listen_port="$2"
+  local backend="$3"
 
-      [[ -n "${sni}" ]] || die "Invalid map item: ${pair}"
-      [[ -n "${target}" ]] || die "Invalid map item: ${pair}"
-      validate_host_port "${target}"
+  cat <<EOF
+upstream ${safe_name}_tcp_backend {
+    server ${backend};
+}
 
-      echo "    ${sni} ${target};"
-    done
+server {
+    listen ${listen_port};
 
-    echo "}"
-    echo
-    echo "server {"
-    echo "    listen ${listen_port};"
-    echo
-    echo "    ssl_preread on;"
-    echo "    proxy_connect_timeout 5s;"
-    echo "    proxy_timeout 1h;"
-    echo
-    echo "    proxy_pass \$${safe_name}_backend;"
-    echo "}"
-  } > "${conf}"
+    proxy_connect_timeout 5s;
+    proxy_timeout 1h;
 
-  reload_nginx
+    proxy_pass ${safe_name}_tcp_backend;
+}
+EOF
+}
+
+nginx_stream_render_udp() {
+  local safe_name="$1"
+  local listen_port="$2"
+  local backend="$3"
+
+  cat <<EOF
+upstream ${safe_name}_udp_backend {
+    server ${backend};
+}
+
+server {
+    listen ${listen_port} udp;
+
+    proxy_timeout 30s;
+    proxy_responses 1;
+
+    proxy_pass ${safe_name}_udp_backend;
+}
+EOF
+}
+
+nginx_stream_render_tls_passthrough() {
+  local safe_name="$1"
+  local listen_port="$2"
+  local default_backend="$3"
+  local map_items="$4"
+
+  echo "map \$ssl_preread_server_name \$${safe_name}_backend {"
+  echo "    default ${default_backend};"
+
+  IFS=',' read -ra pairs <<< "${map_items}"
+  for pair in "${pairs[@]}"; do
+    local sni="${pair%%=*}"
+    local target="${pair#*=}"
+
+    [[ -n "${sni}" ]] || die "Invalid map item: ${pair}"
+    [[ -n "${target}" ]] || die "Invalid map item: ${pair}"
+    validate_sni "${sni}"
+    validate_host_port "${target}"
+
+    echo "    ${sni} ${target};"
+  done
+
+  cat <<EOF
+}
+
+server {
+    listen ${listen_port};
+
+    ssl_preread on;
+    proxy_connect_timeout 5s;
+    proxy_timeout 1h;
+
+    proxy_pass \$${safe_name}_backend;
+}
+EOF
 }

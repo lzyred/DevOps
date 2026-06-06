@@ -1,0 +1,28 @@
+name: nginx-gateway-ci
+
+on:
+  push:
+    paths:
+      - 'nginx-gateway/**'
+  pull_request:
+    paths:
+      - 'nginx-gateway/**'
+
+jobs:
+  shell-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Bash syntax check
+        run: |
+          find nginx-gateway -type f -name '*.sh' -print0 \
+            | xargs -0 -I{} bash -n {}
+
+      - name: ShellCheck
+        run: |
+          shellcheck nginx-gateway/gateway.sh nginx-gateway/lib/*.sh nginx-gateway/modules/*.sh

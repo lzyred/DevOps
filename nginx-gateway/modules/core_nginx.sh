@@ -57,32 +57,39 @@ EOF
 
 nginx_core_ensure_http_include() {
   local conf="/etc/nginx/nginx.conf"
+  local tmp
 
   if grep -Fq "include /etc/nginx/http.d/*.conf;" "${conf}"; then
     return
   fi
 
-  backup_file "${conf}"
+  tmp="$(mktemp /tmp/nginx-gateway-nginxconf.XXXXXX)"
+  cp -a "${conf}" "${tmp}"
 
-  if grep -Fq "include /etc/nginx/conf.d/*.conf;" "${conf}"; then
-    sed -i '/include \/etc\/nginx\/conf.d\/\*.conf;/a\    include /etc/nginx/http.d/*.conf;' "${conf}" \
-      || die "Failed to add http.d include to nginx.conf"
+  if grep -Fq "include /etc/nginx/conf.d/*.conf;" "${tmp}"; then
+    sed -i '/include \/etc\/nginx\/conf.d\/\*.conf;/a\    include /etc/nginx/http.d/*.conf;' "${tmp}"
   else
-    sed -i '/http {/a\    include /etc/nginx/http.d/*.conf;' "${conf}" \
-      || die "Failed to add http.d include to nginx.conf"
+    sed -i '/http {/a\    include /etc/nginx/http.d/*.conf;' "${tmp}"
   fi
+
+  safe_apply_nginx_conf "${conf}" < "${tmp}"
+  rm -f "${tmp}"
 }
 
 nginx_core_ensure_stream_include() {
   local conf="/etc/nginx/nginx.conf"
+  local tmp
 
   if grep -Fq "include /etc/nginx/stream.d/*.conf;" "${conf}"; then
     return
   fi
 
-  backup_file "${conf}"
+  nginx_core_ensure_stream_module_available
 
-  cat >> "${conf}" <<'EOF'
+  tmp="$(mktemp /tmp/nginx-gateway-nginxconf.XXXXXX)"
+  cp -a "${conf}" "${tmp}"
+
+  cat >> "${tmp}" <<'EOF'
 
 # Managed by nginx-gateway.
 # L4 TCP/UDP proxy configs should be placed under /etc/nginx/stream.d/.
@@ -97,4 +104,50 @@ stream {
     include /etc/nginx/stream.d/*.conf;
 }
 EOF
+
+  safe_apply_nginx_conf "${conf}" < "${tmp}"
+  rm -f "${tmp}"
+}
+
+nginx_core_ensure_stream_module_available() {
+  if nginx -V 2>&1 | grep -Eq -- '--with-stream(=dynamic)?'; then
+    nginx_core_ensure_dynamic_stream_loaded || true
+    return
+  fi
+
+  if apt-cache show nginx-module-stream >/dev/null 2>&1; then
+    log "Installing nginx-module-stream package..."
+    apt-get install -y nginx-module-stream
+    nginx_core_ensure_dynamic_stream_loaded || true
+    return
+  fi
+
+  warn "Could not confirm Nginx stream module from nginx -V or package metadata."
+  warn "The next nginx -t will be the source of truth; rollback will happen if stream is unsupported."
+}
+
+nginx_core_ensure_dynamic_stream_loaded() {
+  local conf="/etc/nginx/nginx.conf"
+  local module_path=""
+  local tmp
+
+  if nginx -V 2>&1 | grep -Eq -- '--with-stream( |$)'; then
+    return 0
+  fi
+
+  module_path="$(find /usr/lib/nginx/modules /usr/lib64/nginx/modules -name 'ngx_stream_module.so' 2>/dev/null | head -n 1 || true)"
+  [[ -n "${module_path}" ]] || return 1
+
+  if grep -Fq "${module_path}" "${conf}" || grep -Fq "ngx_stream_module.so" "${conf}"; then
+    return 0
+  fi
+
+  tmp="$(mktemp /tmp/nginx-gateway-nginxconf.XXXXXX)"
+  {
+    echo "load_module ${module_path};"
+    cat "${conf}"
+  } > "${tmp}"
+
+  safe_apply_nginx_conf "${conf}" < "${tmp}"
+  rm -f "${tmp}"
 }

@@ -2,12 +2,15 @@
 
 A modular Debian 12 bootstrap toolkit for running Nginx as a small gateway.
 
+Current quality target: **v0.2 hardening**.
+
 It separates gateway concerns into independent modules:
 
 - **Core**: install official Nginx and initialize standard config directories.
 - **TLS**: issue Let's Encrypt certificates through Cloudflare DNS API.
 - **HTTP/L7**: create static HTTPS sites or HTTP reverse proxy sites.
 - **Stream/L4**: create TCP, UDP, and TLS passthrough proxies through Nginx `stream`.
+- **Cloudflare Real IP**: keep Cloudflare IP ranges updated for correct visitor IP logging.
 
 The design goal is to avoid coupling Nginx installation with only one web-site scenario. HTTP reverse proxy and L4 stream proxy are different modules.
 
@@ -19,14 +22,16 @@ nginx-gateway/
 ├── lib/
 │   └── common.sh
 ├── modules/
-│   ├── core_nginx.sh
 │   ├── cert_cloudflare.sh
+│   ├── cf_real_ip.sh
+│   ├── core_nginx.sh
 │   ├── http_site.sh
 │   └── stream_proxy.sh
-└── examples/
-    ├── http-reverse-proxy.example
-    ├── stream-tcp.example
-    └── stream-tls-passthrough.example
+├── examples/
+│   ├── http-reverse-proxy.example
+│   ├── stream-tcp.example
+│   └── stream-tls-passthrough.example
+└── .github/workflows/nginx-gateway-ci.yml
 ```
 
 ## Requirements
@@ -68,9 +73,9 @@ sudo ./gateway.sh cert-cf \
   --wildcard
 ```
 
-The script prompts for the Cloudflare API Token securely if `--cf-token` is not provided.
+The script prompts for the Cloudflare API Token securely if the credential file does not already exist.
 
-Using environment variable:
+You can also pass the token through an environment variable:
 
 ```bash
 CF_API_TOKEN="xxx" sudo -E ./gateway.sh cert-cf \
@@ -79,12 +84,31 @@ CF_API_TOKEN="xxx" sudo -E ./gateway.sh cert-cf \
   --wildcard
 ```
 
+The command line intentionally does **not** support a `--cf-token` argument because command line arguments are commonly exposed through shell history and process inspection.
+
 Certificate output:
 
 ```text
 /etc/letsencrypt/live/example.com/fullchain.pem
 /etc/letsencrypt/live/example.com/privkey.pem
 ```
+
+## Install Cloudflare Real IP config
+
+```bash
+sudo ./gateway.sh cf-real-ip
+```
+
+This creates:
+
+```text
+/etc/nginx/http.d/00-cloudflare-real-ip.conf
+/usr/local/sbin/update-cloudflare-real-ip
+/etc/systemd/system/update-cloudflare-real-ip.service
+/etc/systemd/system/update-cloudflare-real-ip.timer
+```
+
+The timer refreshes Cloudflare IP ranges daily.
 
 ## Create HTTP reverse proxy site
 
@@ -198,6 +222,18 @@ For raw TCP/UDP services:
 - use `DNS only`, then clients connect directly to this Nginx gateway, or
 - use Cloudflare Spectrum if you need Cloudflare to proxy TCP/UDP.
 
+## Built-in safety controls
+
+v0.2 adds these controls:
+
+- all generated Nginx configs are written through a temporary file first;
+- existing config files are backed up;
+- `nginx -t` is executed before reload;
+- invalid config automatically rolls back;
+- domain, SNI, URL, backend and port inputs are validated;
+- service names are sanitized before becoming Nginx upstream or variable identifiers;
+- Cloudflare token is not accepted through a command-line argument.
+
 ## Validate
 
 ```bash
@@ -213,3 +249,4 @@ nginx -T | grep -E "http.d|stream.d|ssl_preread|proxy_pass"
 - Avoid Cloudflare `Flexible` mode.
 - Keep Cloudflare API Token scoped to the specific zone.
 - Do not expose database ports publicly unless there is a clear security control such as source IP allowlist, VPN, mTLS, or firewall rules.
+- This toolkit is a small gateway bootstrap, not a full ingress platform.

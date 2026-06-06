@@ -35,7 +35,32 @@ cert_cloudflare_issue() {
   [[ -n "${domain}" ]] || die "--domain is required"
   [[ -n "${email}" ]] || die "--email is required"
 
+  validate_domain "${domain}"
+  validate_email "${email}"
+  validate_port "${propagation_seconds}"
+
+  cert_cloudflare_install_dependencies
+  cert_cloudflare_prepare_credentials "${domain}"
+  cert_cloudflare_run_certbot "${domain}" "${email}" "${wildcard}" "${propagation_seconds}"
+  cert_cloudflare_install_renewal_hook
+
+  log "Certificate issued:"
+  openssl x509 \
+    -in "/etc/letsencrypt/live/${domain}/fullchain.pem" \
+    -noout \
+    -issuer \
+    -subject \
+    -dates
+}
+
+cert_cloudflare_install_dependencies() {
   log "Installing Certbot and Cloudflare plugin..."
+
+  if ! command -v snap >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y snapd
+  fi
+
   systemctl enable --now snapd.socket
 
   if ! snap list core >/dev/null 2>&1; then
@@ -58,11 +83,14 @@ cert_cloudflare_issue() {
   else
     snap refresh certbot-dns-cloudflare || true
   fi
+}
+
+cert_cloudflare_prepare_credentials() {
+  local domain="$1"
+  local cred_file="/etc/letsencrypt/cloudflare/${domain}.ini"
 
   log "Preparing Cloudflare credential file..."
   install -d -m 0700 /etc/letsencrypt/cloudflare
-
-  local cred_file="/etc/letsencrypt/cloudflare/${domain}.ini"
 
   if [[ ! -f "${cred_file}" ]]; then
     local token="${CF_API_TOKEN:-}"
@@ -81,7 +109,14 @@ cert_cloudflare_issue() {
     chmod 600 "${cred_file}"
     log "Using existing credential file: ${cred_file}"
   fi
+}
 
+cert_cloudflare_run_certbot() {
+  local domain="$1"
+  local email="$2"
+  local wildcard="$3"
+  local propagation_seconds="$4"
+  local cred_file="/etc/letsencrypt/cloudflare/${domain}.ini"
   local domain_args=()
 
   if [[ "${wildcard}" == "true" ]]; then
@@ -103,7 +138,9 @@ cert_cloudflare_issue() {
     --keep-until-expiring \
     --expand \
     "${domain_args[@]}"
+}
 
+cert_cloudflare_install_renewal_hook() {
   log "Installing renewal hook..."
   install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
 
@@ -115,12 +152,4 @@ systemctl reload nginx
 EOF
 
   chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
-
-  log "Certificate issued:"
-  openssl x509 \
-    -in "/etc/letsencrypt/live/${domain}/fullchain.pem" \
-    -noout \
-    -issuer \
-    -subject \
-    -dates
 }

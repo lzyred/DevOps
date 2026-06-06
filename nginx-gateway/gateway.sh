@@ -6,6 +6,7 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${BASE_DIR}/lib/common.sh"
 source "${BASE_DIR}/modules/core_nginx.sh"
 source "${BASE_DIR}/modules/cert_cloudflare.sh"
+source "${BASE_DIR}/modules/cf_real_ip.sh"
 source "${BASE_DIR}/modules/http_site.sh"
 source "${BASE_DIR}/modules/stream_proxy.sh"
 
@@ -17,6 +18,7 @@ Usage:
 Commands:
   core                    Install and initialize Nginx gateway
   cert-cf                 Issue Let's Encrypt certificate through Cloudflare DNS
+  cf-real-ip              Install or refresh Cloudflare Real IP config
   http-site               Create HTTP/HTTPS L7 site or reverse proxy
   stream-tcp              Create L4 TCP proxy
   stream-udp              Create L4 UDP proxy
@@ -28,6 +30,8 @@ Examples:
   sudo ./gateway.sh core
 
   sudo ./gateway.sh cert-cf --domain example.com --email admin@example.com --wildcard
+
+  sudo ./gateway.sh cf-real-ip
 
   sudo ./gateway.sh http-site \
     --domain app.example.com \
@@ -56,6 +60,9 @@ case "${cmd}" in
     ;;
   cert-cf)
     cert_cloudflare_issue "$@"
+    ;;
+  cf-real-ip)
+    nginx_cf_real_ip_install "$@"
     ;;
   http-site)
     nginx_http_site_create "$@"
