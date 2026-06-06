@@ -1,20 +1,20 @@
 # Nginx Gateway Bootstrap
 
-A modular Debian 12 bootstrap toolkit for running Nginx as a small gateway.
+A modular Debian 12 bootstrap toolkit for using Nginx as a lightweight gateway.
 
-Current quality target: **v0.2 hardening**.
-
-It separates gateway concerns into independent modules:
+This directory is intentionally split by gateway responsibility instead of treating Nginx as only a web server:
 
 - **Core**: install official Nginx and initialize standard config directories.
-- **TLS**: issue Let's Encrypt certificates through Cloudflare DNS API.
-- **HTTP/L7**: create static HTTPS sites or HTTP reverse proxy sites.
+- **TLS**: issue Let's Encrypt certificates through Cloudflare DNS-01.
+- **HTTP/L7**: create HTTPS static sites or HTTP reverse proxy sites.
 - **Stream/L4**: create TCP, UDP, and TLS passthrough proxies through Nginx `stream`.
-- **Cloudflare Real IP**: keep Cloudflare IP ranges updated for correct visitor IP logging.
+- **Cloudflare Real IP**: configure Nginx to restore the original visitor IP when traffic is behind Cloudflare.
 
-The design goal is to avoid coupling Nginx installation with only one web-site scenario. HTTP reverse proxy and L4 stream proxy are different modules.
+> Current status: this is a maintained bootstrap script set, but it should still be validated on a clean Debian 12 test host before production use. Do not treat it as a fully tested ingress platform.
 
-## Directory layout
+---
+
+## 1. Repository layout
 
 ```text
 nginx-gateway/
@@ -27,42 +27,155 @@ nginx-gateway/
 │   ├── core_nginx.sh
 │   ├── http_site.sh
 │   └── stream_proxy.sh
-├── examples/
-│   ├── http-reverse-proxy.example
-│   ├── stream-tcp.example
-│   └── stream-tls-passthrough.example
-└── .github/workflows/nginx-gateway-ci.yml
+└── examples/
+    ├── http-reverse-proxy.example
+    ├── stream-tcp.example
+    └── stream-tls-passthrough.example
 ```
 
-## Requirements
-
-- Debian 12 bookworm
-- root privilege
-- DNS hosted on Cloudflare if using the certificate module
-- Cloudflare API Token with minimum permissions:
-  - `Zone / DNS / Edit`
-  - `Zone / Zone / Read`
-
-## Install core Nginx gateway
-
-```bash
-cd nginx-gateway
-chmod +x gateway.sh
-sudo ./gateway.sh core
-```
-
-This installs the official Nginx mainline package and initializes:
+GitHub Actions workflow is stored at the repository root:
 
 ```text
-/etc/nginx/http.d/
-/etc/nginx/stream.d/
+.github/workflows/nginx-gateway-ci.yml
 ```
 
-HTTP virtual hosts are placed under `/etc/nginx/http.d/`.
+---
 
-L4 stream proxy configs are placed under `/etc/nginx/stream.d/`.
+## 2. Requirements
 
-## Issue Let's Encrypt certificate through Cloudflare
+| Item | Requirement |
+|---|---|
+| OS | Debian 12 bookworm |
+| Privilege | root / sudo |
+| DNS provider | Cloudflare, only required for certificate automation |
+| Certificate method | Let's Encrypt DNS-01 through Cloudflare API |
+| Nginx package | nginx.org official mainline package |
+| HTTP configs | `/etc/nginx/http.d/*.conf` |
+| L4 configs | `/etc/nginx/stream.d/*.conf` |
+
+---
+
+## 3. Quick start
+
+```bash
+git clone https://github.com/lzyred/DevOps.git
+cd DevOps/nginx-gateway
+chmod +x gateway.sh
+
+sudo ./gateway.sh core
+sudo ./gateway.sh test
+```
+
+`core` installs Nginx, creates the config directories, and wires these includes into Nginx:
+
+```text
+/etc/nginx/http.d/*.conf
+/etc/nginx/stream.d/*.conf
+```
+
+---
+
+## 4. Cloudflare API Token guide
+
+This project uses Cloudflare DNS API only for Let's Encrypt DNS-01 validation. It does **not** require a Cloudflare Global API Key.
+
+### 4.1 Create the token
+
+Go to:
+
+```text
+Cloudflare Dashboard
+→ My Profile
+→ API Tokens
+→ Create Token
+```
+
+Recommended template:
+
+```text
+Edit zone DNS
+```
+
+Recommended token name:
+
+```text
+letsencrypt-certbot-example.com
+```
+
+### 4.2 Required permissions
+
+Minimum practical permissions:
+
+```text
+Zone / DNS / Edit
+Zone / Zone / Read
+```
+
+Recommended resource scope:
+
+```text
+Zone Resources:
+  Include → Specific zone → example.com
+```
+
+Do **not** select all zones unless there is a clear operational reason.
+
+### 4.3 Optional token restrictions
+
+For better security, you can additionally configure:
+
+```text
+Client IP Address Filtering: your server public IP
+TTL / expiration: according to your rotation policy
+```
+
+Avoid short TTL values if the token is expected to renew certificates automatically for a long time.
+
+### 4.4 Save the token on the server
+
+The script can prompt for the token automatically, but the final credential file should be:
+
+```text
+/etc/letsencrypt/cloudflare/example.com.ini
+```
+
+Expected file content:
+
+```ini
+dns_cloudflare_api_token = <YOUR_CLOUDFLARE_API_TOKEN>
+```
+
+Required permission:
+
+```bash
+sudo chmod 600 /etc/letsencrypt/cloudflare/example.com.ini
+```
+
+The script intentionally does **not** support `--cf-token` as a command-line argument, because command-line secrets can leak through shell history and process inspection.
+
+### 4.5 Verify token validity
+
+You can verify the token before running Certbot:
+
+```bash
+curl "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+  --header "Authorization: Bearer <YOUR_CLOUDFLARE_API_TOKEN>"
+```
+
+Expected result should include:
+
+```json
+{
+  "success": true,
+  "result": {
+    "status": "active"
+  }
+}
+```
+
+---
+
+## 5. Issue Let's Encrypt certificate through Cloudflare
 
 Wildcard certificate:
 
@@ -73,18 +186,22 @@ sudo ./gateway.sh cert-cf \
   --wildcard
 ```
 
-The script prompts for the Cloudflare API Token securely if the credential file does not already exist.
-
-You can also pass the token through an environment variable:
+Non-wildcard certificate:
 
 ```bash
-CF_API_TOKEN="xxx" sudo -E ./gateway.sh cert-cf \
+sudo ./gateway.sh cert-cf \
+  --domain example.com \
+  --email admin@example.com
+```
+
+With environment variable:
+
+```bash
+CF_API_TOKEN="<YOUR_CLOUDFLARE_API_TOKEN>" sudo -E ./gateway.sh cert-cf \
   --domain example.com \
   --email admin@example.com \
   --wildcard
 ```
-
-The command line intentionally does **not** support a `--cf-token` argument because command line arguments are commonly exposed through shell history and process inspection.
 
 Certificate output:
 
@@ -93,7 +210,38 @@ Certificate output:
 /etc/letsencrypt/live/example.com/privkey.pem
 ```
 
-## Install Cloudflare Real IP config
+Test renewal:
+
+```bash
+sudo certbot renew --dry-run
+```
+
+---
+
+## 6. Cloudflare SSL/TLS mode
+
+For Cloudflare-proxied HTTPS sites, use:
+
+```text
+Cloudflare Dashboard
+→ SSL/TLS
+→ Overview
+→ Full (strict)
+```
+
+Avoid:
+
+```text
+Flexible
+```
+
+Reason: `Flexible` encrypts browser-to-Cloudflare only. `Full (strict)` validates the source server certificate and keeps the Cloudflare-to-origin connection encrypted.
+
+---
+
+## 7. Configure Cloudflare Real IP
+
+When Cloudflare proxy is enabled, Nginx normally sees Cloudflare edge IPs. To log the original visitor IP:
 
 ```bash
 sudo ./gateway.sh cf-real-ip
@@ -110,7 +258,15 @@ This creates:
 
 The timer refreshes Cloudflare IP ranges daily.
 
-## Create HTTP reverse proxy site
+Validate:
+
+```bash
+nginx -T | grep -E "set_real_ip_from|CF-Connecting-IP|real_ip_recursive"
+```
+
+---
+
+## 8. Create HTTP reverse proxy site
 
 ```bash
 sudo ./gateway.sh http-site \
@@ -122,10 +278,18 @@ sudo ./gateway.sh http-site \
 Effect:
 
 ```text
-client -> Nginx HTTPS 443 -> backend http://127.0.0.1:8080
+client → Nginx HTTPS 443 → backend http://127.0.0.1:8080
 ```
 
-## Create static HTTPS site
+The generated config is stored at:
+
+```text
+/etc/nginx/http.d/app.example.com.conf
+```
+
+---
+
+## 9. Create static HTTPS site
 
 ```bash
 sudo ./gateway.sh http-site \
@@ -134,7 +298,15 @@ sudo ./gateway.sh http-site \
   --web-root /var/www/www.example.com/html
 ```
 
-## Create TCP L4 proxy
+Effect:
+
+```text
+client → Nginx HTTPS 443 → static files
+```
+
+---
+
+## 10. Create TCP L4 proxy
 
 ```bash
 sudo ./gateway.sh stream-tcp \
@@ -146,12 +318,25 @@ sudo ./gateway.sh stream-tcp \
 Effect:
 
 ```text
-client -> Nginx:33060 -> 10.10.10.20:3306
+client → Nginx:33060 → 10.10.10.20:3306
 ```
 
-Suitable for MySQL, PostgreSQL, Redis, SSH, MQTT, and custom TCP services.
+Suitable examples:
 
-## Create UDP L4 proxy
+```text
+MySQL
+PostgreSQL
+Redis
+SSH
+MQTT
+custom TCP services
+```
+
+Security note: do not expose database ports to the public Internet without source IP allowlist, VPN, mTLS, firewall policy, or another explicit access-control layer.
+
+---
+
+## 11. Create UDP L4 proxy
 
 ```bash
 sudo ./gateway.sh stream-udp \
@@ -163,10 +348,12 @@ sudo ./gateway.sh stream-udp \
 Effect:
 
 ```text
-client -> Nginx:5353/udp -> 10.10.10.53:53/udp
+client → Nginx:5353/udp → 10.10.10.53:53/udp
 ```
 
-## Create TLS passthrough SNI router
+---
+
+## 12. Create TLS passthrough SNI router
 
 ```bash
 sudo ./gateway.sh stream-tls-pass \
@@ -179,19 +366,23 @@ sudo ./gateway.sh stream-tls-pass \
 Effect:
 
 ```text
-git.example.com       -> Nginx:443 -> 10.10.10.21:443
-registry.example.com  -> Nginx:443 -> 10.10.10.22:443
-unknown SNI           -> Nginx:443 -> 10.10.10.10:443
+git.example.com       → Nginx:443 → 10.10.10.21:443
+registry.example.com  → Nginx:443 → 10.10.10.22:443
+unknown SNI           → Nginx:443 → 10.10.10.10:443
 ```
 
 In TLS passthrough mode:
 
-- Nginx does not decrypt TLS.
-- Nginx does not use the certificate.
-- Backend services own their certificates.
-- Nginx only routes traffic based on SNI.
+```text
+Nginx does not decrypt TLS.
+Nginx does not use local certificates.
+Backend services must own their certificates.
+Nginx only routes traffic based on SNI.
+```
 
-## Important boundary: HTTP 443 and stream 443
+---
+
+## 13. Important boundary: HTTP 443 and stream 443
 
 The same IP and port cannot be owned by both HTTP and stream contexts at the same time:
 
@@ -205,7 +396,7 @@ stream {
 }
 ```
 
-Use one of these designs:
+Valid designs:
 
 | Design | Description |
 |---|---|
@@ -213,40 +404,91 @@ Use one of these designs:
 | Different ports | Web uses 443; L4 services use ports such as 33060 or 15432. |
 | Stream owns 443 | Stream routes TLS passthrough by SNI to HTTPS backends. |
 
-## Cloudflare boundary
+---
 
-Cloudflare normal orange-cloud proxy is mainly for HTTP/HTTPS traffic on Cloudflare-supported ports. It does not proxy arbitrary TCP/UDP services unless using Cloudflare Spectrum.
+## 14. Cloudflare boundary
+
+Cloudflare normal orange-cloud proxy is for HTTP/HTTPS traffic on Cloudflare-supported ports. It does not proxy arbitrary TCP/UDP services unless Cloudflare Spectrum is used.
 
 For raw TCP/UDP services:
 
-- use `DNS only`, then clients connect directly to this Nginx gateway, or
-- use Cloudflare Spectrum if you need Cloudflare to proxy TCP/UDP.
+```text
+Option 1: DNS only, client connects directly to this Nginx gateway.
+Option 2: Cloudflare Spectrum, Cloudflare proxies TCP/UDP.
+```
 
-## Built-in safety controls
+Do not expect Cloudflare orange-cloud proxy to work for MySQL, PostgreSQL, Redis, SSH, or arbitrary UDP services.
 
-v0.2 adds these controls:
+---
 
-- all generated Nginx configs are written through a temporary file first;
-- existing config files are backed up;
-- `nginx -t` is executed before reload;
-- invalid config automatically rolls back;
-- domain, SNI, URL, backend and port inputs are validated;
-- service names are sanitized before becoming Nginx upstream or variable identifiers;
-- Cloudflare token is not accepted through a command-line argument.
+## 15. Validation checklist
 
-## Validate
+Run after installation:
 
 ```bash
 sudo ./gateway.sh test
 sudo ./gateway.sh reload
-sudo certbot renew --dry-run
 nginx -T | grep -E "http.d|stream.d|ssl_preread|proxy_pass"
+systemctl status nginx --no-pager
 ```
 
-## Production notes
+Run after certificate issuance:
 
-- Use Cloudflare `Full (strict)` for HTTPS sites.
-- Avoid Cloudflare `Flexible` mode.
-- Keep Cloudflare API Token scoped to the specific zone.
-- Do not expose database ports publicly unless there is a clear security control such as source IP allowlist, VPN, mTLS, or firewall rules.
-- This toolkit is a small gateway bootstrap, not a full ingress platform.
+```bash
+sudo certbot certificates
+sudo certbot renew --dry-run
+```
+
+Run after Cloudflare Real IP setup:
+
+```bash
+nginx -T | grep -E "set_real_ip_from|CF-Connecting-IP|real_ip_recursive"
+```
+
+Run after stream proxy creation:
+
+```bash
+ss -lntup | grep -E '33060|5353|443'
+```
+
+---
+
+## 16. Known limitations
+
+Current known limitations:
+
+- The scripts have not been fully validated across all Debian 12 package states.
+- The generated configs are intentionally simple and do not replace a full ingress controller or service mesh.
+- HTTP module supports basic reverse proxy and static site use cases only.
+- Stream module supports one backend per generated proxy config.
+- Cloudflare Real IP updater depends on external Cloudflare IP list endpoints being reachable.
+- Cloudflare API Token rotation is not automated.
+- CI checks Bash syntax and ShellCheck only; it does not run a full Debian 12 integration test.
+
+---
+
+## 17. Recommended production process
+
+Use this order:
+
+```text
+1. Test on a clean Debian 12 VM.
+2. Run core install.
+3. Validate nginx -t.
+4. Create Cloudflare API Token with zone-scoped DNS edit permission.
+5. Issue certificate.
+6. Enable Cloudflare Full (strict).
+7. Create one HTTP site or one stream proxy.
+8. Validate access logs and upstream connectivity.
+9. Add firewall rules.
+10. Only then repeat for additional services.
+```
+
+---
+
+## 18. Reference links
+
+- Cloudflare Create API Token: https://developers.cloudflare.com/fundamentals/api/get-started/create-token/
+- Certbot DNS Cloudflare plugin: https://certbot-dns-cloudflare.readthedocs.io/en/stable/
+- Nginx stream module: https://nginx.org/en/docs/stream/ngx_stream_core_module.html
+- Nginx proxy stream module: https://nginx.org/en/docs/stream/ngx_stream_proxy_module.html
