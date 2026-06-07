@@ -17,6 +17,8 @@ source "${BASE_DIR}/modules/http_site.sh"
 source "${BASE_DIR}/modules/stream_proxy.sh"
 # shellcheck source=modules/ops.sh
 source "${BASE_DIR}/modules/ops.sh"
+# shellcheck source=modules/hardening.sh
+source "${BASE_DIR}/modules/hardening.sh"
 
 usage() {
   cat <<'EOF'
@@ -25,6 +27,7 @@ Usage:
 
 Provisioning commands:
   core                    Install and initialize Nginx gateway
+  hardening               Install baseline HTTP security/performance config
   cert-cf                 Issue Let's Encrypt certificate through Cloudflare DNS
   cf-real-ip              Install or refresh Cloudflare Real IP config
   http-site               Create HTTP/HTTPS L7 site or reverse proxy
@@ -48,6 +51,7 @@ Ops commands:
 
 Examples:
   sudo ./gateway.sh core
+  sudo ./gateway.sh hardening
   sudo ./gateway.sh cert-cf --domain example.com --email admin@example.com --wildcard
   sudo ./gateway.sh cf-real-ip
 
@@ -87,6 +91,9 @@ shift || true
 case "${cmd}" in
   core)
     nginx_core_install "$@"
+    ;;
+  hardening)
+    nginx_hardening_install "$@"
     ;;
   cert-cf)
     cert_cloudflare_issue "$@"
