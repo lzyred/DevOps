@@ -34,7 +34,7 @@ nginx_ops_status() {
 
   _ngw_section "Listening ports"
   if command -v ss >/dev/null 2>&1; then
-    ss -lntup | grep -E ':(80|443)\b|nginx' || true
+    ss -lntup | grep -E ':(80|443)([[:space:]]|$)|nginx' || true
   else
     _ngw_warn "ss command not found"
   fi
@@ -155,7 +155,7 @@ nginx_ops_list_http() {
   for file in "${files[@]}"; do
     echo "- $(basename "${file}")"
     echo "  path: ${file}"
-    grep -E '^\s*(server_name|listen|proxy_pass|root|ssl_certificate)\b' "${file}" | sed 's/^/  /' || true
+    grep -E '^[[:space:]]*(server_name|listen|proxy_pass|root|ssl_certificate)\b' "${file}" | sed 's/^/  /' || true
   done
 }
 
@@ -175,7 +175,7 @@ nginx_ops_list_stream() {
   for file in "${files[@]}"; do
     echo "- $(basename "${file}")"
     echo "  path: ${file}"
-    grep -E '^\s*(listen|proxy_pass|server|ssl_preread|map)\b' "${file}" | sed 's/^/  /' || true
+    grep -E '^[[:space:]]*(listen|proxy_pass|server|ssl_preread|map)\b' "${file}" | sed 's/^/  /' || true
   done
 }
 
