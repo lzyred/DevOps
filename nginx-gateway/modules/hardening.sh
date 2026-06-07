@@ -15,27 +15,47 @@ nginx_hardening_render() {
 # Managed by nginx-gateway.
 # Baseline HTTP hardening and performance defaults.
 # This file is loaded inside the nginx http context through /etc/nginx/http.d/*.conf.
+# The defaults are intentionally friendly to WebSocket, SSE, long polling,
+# streaming APIs, and other long-lived HTTP connections.
 
 # Hide the Nginx version from default error pages and the Server response header.
 # Note: stock Nginx still returns "Server: nginx". Removing the header completely
 # requires third-party modules or a custom build, which this toolkit does not use.
 server_tokens off;
 
-# Basic timeout hardening against slow clients.
-client_header_timeout 15s;
-client_body_timeout 30s;
-send_timeout 30s;
-keepalive_timeout 65s;
+# Basic timeout hardening.
+# These values avoid overly aggressive disconnects for slow clients and long-lived traffic.
+client_header_timeout 30s;
+client_body_timeout 300s;
+send_timeout 300s;
+keepalive_timeout 75s;
 reset_timedout_connection on;
 
 # Default upload/body size. Individual server blocks can override it.
 client_max_body_size 50m;
 
 # WebSocket-friendly connection upgrade mapping.
+# Reverse proxy locations should use:
+#   proxy_set_header Upgrade $http_upgrade;
+#   proxy_set_header Connection $connection_upgrade;
 map $http_upgrade $connection_upgrade {
     default upgrade;
     '' close;
 }
+
+# Long-lived upstream defaults.
+# proxy_read_timeout controls idle upstream reads and is the key setting for
+# WebSocket/SSE/long polling connections that may stay open for a long time.
+proxy_connect_timeout 10s;
+proxy_send_timeout 3600s;
+proxy_read_timeout 3600s;
+
+# Streaming-friendly defaults.
+# This improves WebSocket/SSE/log tail/AI streaming behavior at the cost of
+# some buffering efficiency for normal HTTP responses.
+proxy_buffering off;
+proxy_request_buffering off;
+proxy_cache off;
 
 # Compression for text-like responses.
 gzip on;
