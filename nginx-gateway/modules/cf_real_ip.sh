@@ -7,12 +7,25 @@ nginx_cf_real_ip_install() {
 
   log "Installing Cloudflare Real IP updater..."
 
+  if ! command -v curl >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y curl
+  fi
+
   cat > "${script_path}" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
 CONF="/etc/nginx/http.d/00-cloudflare-real-ip.conf"
 TMP="$(mktemp /tmp/cloudflare-real-ip.XXXXXX)"
+BACKUP=""
+HAD_OLD=false
+
+cleanup() {
+  rm -f "${TMP}"
+}
+
+trap cleanup EXIT
 
 mkdir -p /etc/nginx/http.d
 
@@ -34,11 +47,56 @@ mkdir -p /etc/nginx/http.d
   echo "real_ip_recursive on;"
 } > "${TMP}"
 
-install -m 0644 "${TMP}" "${CONF}"
-rm -f "${TMP}"
+if [[ ! -s "${TMP}" ]]; then
+  echo "[ERROR] Generated Cloudflare Real IP config is empty." >&2
+  exit 1
+fi
 
-nginx -t
-systemctl reload nginx
+grep -q "set_real_ip_from" "${TMP}" || {
+  echo "[ERROR] Generated config does not contain Cloudflare IP ranges." >&2
+  exit 1
+}
+
+grep -q "real_ip_header CF-Connecting-IP;" "${TMP}" || {
+  echo "[ERROR] Generated config does not contain real_ip_header." >&2
+  exit 1
+}
+
+if [[ -f "${CONF}" ]]; then
+  HAD_OLD=true
+  BACKUP="${CONF}.bak.$(date +%Y%m%d%H%M%S).$$"
+  cp -a "${CONF}" "${BACKUP}"
+fi
+
+install -m 0644 "${TMP}" "${CONF}"
+
+if ! nginx -t; then
+  echo "[ERROR] nginx -t failed after updating Cloudflare Real IP config; rolling back." >&2
+
+  if [[ "${HAD_OLD}" == true ]]; then
+    install -m 0644 "${BACKUP}" "${CONF}"
+  else
+    rm -f "${CONF}"
+  fi
+
+  nginx -t >/dev/null 2>&1 || true
+  exit 1
+fi
+
+if ! systemctl reload nginx; then
+  echo "[ERROR] Nginx reload failed after updating Cloudflare Real IP config; rolling back." >&2
+
+  if [[ "${HAD_OLD}" == true ]]; then
+    install -m 0644 "${BACKUP}" "${CONF}"
+    nginx -t >/dev/null 2>&1 || true
+    systemctl reload nginx >/dev/null 2>&1 || true
+  else
+    rm -f "${CONF}"
+    nginx -t >/dev/null 2>&1 || true
+  fi
+
+  exit 1
+fi
 EOF
 
   chmod +x "${script_path}"
