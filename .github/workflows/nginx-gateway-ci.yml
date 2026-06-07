@@ -27,4 +27,4 @@ jobs:
 
       - name: ShellCheck
         run: |
-          shellcheck nginx-gateway/gateway.sh nginx-gateway/lib/*.sh nginx-gateway/modules/*.sh
+          shellcheck -x -P nginx-gateway nginx-gateway/gateway.sh nginx-gateway/lib/*.sh nginx-gateway/modules/*.sh
