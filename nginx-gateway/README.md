@@ -47,11 +47,14 @@ GitHub Actions workflow is stored at the repository root:
 |---|---|
 | OS | Debian 12 bookworm |
 | Privilege | root / sudo |
+| Service manager | systemd-managed `nginx` service |
 | DNS provider | Cloudflare, only required for certificate automation |
 | Certificate method | Let's Encrypt DNS-01 through Cloudflare API |
 | Nginx package | nginx.org official mainline package |
 | HTTP configs | `/etc/nginx/http.d/*.conf` |
 | L4 configs | `/etc/nginx/stream.d/*.conf` |
+
+Always run `core` before other modules. `http-site`, `stream-*`, and `cf-real-ip` assume Nginx is already installed and the include directories have already been wired into `nginx.conf`.
 
 ---
 
@@ -73,11 +76,24 @@ sudo ./gateway.sh test
 /etc/nginx/stream.d/*.conf
 ```
 
+Recommended execution order:
+
+```text
+1. sudo ./gateway.sh core
+2. sudo ./gateway.sh cf-real-ip        # only when traffic is behind Cloudflare
+3. sudo ./gateway.sh cert-cf ...
+4. sudo ./gateway.sh http-site ...     # for L7 HTTP/HTTPS traffic
+5. sudo ./gateway.sh stream-tcp ...    # for L4 TCP traffic, if needed
+6. sudo ./gateway.sh test
+```
+
 ---
 
 ## 4. Cloudflare API Token guide
 
 This project uses Cloudflare DNS API only for Let's Encrypt DNS-01 validation. It does **not** require a Cloudflare Global API Key.
+
+DNS-01 validation creates and removes `_acme-challenge` TXT records in the target Cloudflare zone. An A record pointing to this server is not required for DNS-01 issuance, but the domain must already exist in the Cloudflare zone that the token can edit.
 
 ### 4.1 Create the token
 
@@ -104,11 +120,10 @@ letsencrypt-certbot-example.com
 
 ### 4.2 Required permissions
 
-Minimum practical permissions:
+Minimum required permission for Certbot DNS-01:
 
 ```text
 Zone / DNS / Edit
-Zone / Zone / Read
 ```
 
 Recommended resource scope:
@@ -118,7 +133,16 @@ Zone Resources:
   Include → Specific zone → example.com
 ```
 
-Do **not** select all zones unless there is a clear operational reason.
+Do **not** grant these for this use case:
+
+```text
+Global API Key
+All zones
+Account-wide permissions
+Zone / Zone / Read
+```
+
+`Zone / Zone / Read` is not required for this Certbot Cloudflare DNS-01 workflow. The required capability is the ability to create and remove `_acme-challenge` TXT records in the target DNS zone.
 
 ### 4.3 Optional token restrictions
 
@@ -151,11 +175,13 @@ Required permission:
 sudo chmod 600 /etc/letsencrypt/cloudflare/example.com.ini
 ```
 
+Do not delete this credential file after certificate issuance. Certbot renewal uses the same credential file path stored in the renewal configuration.
+
 The script intentionally does **not** support `--cf-token` as a command-line argument, because command-line secrets can leak through shell history and process inspection.
 
 ### 4.5 Verify token validity
 
-You can verify the token before running Certbot:
+You can verify whether the token itself is active:
 
 ```bash
 curl "https://api.cloudflare.com/client/v4/user/tokens/verify" \
@@ -172,6 +198,8 @@ Expected result should include:
   }
 }
 ```
+
+An active token only proves that the token exists and is valid. It does **not** prove that the token has permission to edit the target zone. The real permission test is whether Certbot can create the `_acme-challenge` TXT record during issuance or renewal.
 
 ---
 
@@ -208,6 +236,13 @@ Certificate output:
 ```text
 /etc/letsencrypt/live/example.com/fullchain.pem
 /etc/letsencrypt/live/example.com/privkey.pem
+```
+
+Wildcard coverage:
+
+```text
+*.example.com covers app.example.com
+*.example.com does not cover a.b.example.com
 ```
 
 Test renewal:
@@ -453,13 +488,29 @@ ss -lntup | grep -E '33060|5353|443'
 
 ---
 
-## 16. Known limitations
+## 16. Test matrix
+
+| Scenario | Required checks |
+|---|---|
+| core | nginx.org repo configured, `nginx -V`, `nginx -t` |
+| cert-cf | token can create TXT record, certificate exists, `renew --dry-run` passes |
+| http-site | port 80 redirects to 443, certificate loads, backend proxy works |
+| cf-real-ip | `CF-Connecting-IP` is trusted only from Cloudflare ranges |
+| stream-tcp | port listens, client can reach backend through Nginx |
+| stream-udp | UDP port listens, backend receives request |
+| tls-pass | SNI routes to expected backend, unknown SNI uses fallback backend |
+| rollback | intentionally bad config is rejected and old config restored |
+
+---
+
+## 17. Known limitations
 
 Current known limitations:
 
 - The scripts have not been fully validated across all Debian 12 package states.
 - The generated configs are intentionally simple and do not replace a full ingress controller or service mesh.
 - HTTP module supports basic reverse proxy and static site use cases only.
+- HTTP module uses a simple WebSocket-friendly `Connection: upgrade` header rather than a full `map $http_upgrade` profile.
 - Stream module supports one backend per generated proxy config.
 - Cloudflare Real IP updater depends on external Cloudflare IP list endpoints being reachable.
 - Cloudflare API Token rotation is not automated.
@@ -467,7 +518,7 @@ Current known limitations:
 
 ---
 
-## 17. Recommended production process
+## 18. Recommended production process
 
 Use this order:
 
@@ -475,7 +526,7 @@ Use this order:
 1. Test on a clean Debian 12 VM.
 2. Run core install.
 3. Validate nginx -t.
-4. Create Cloudflare API Token with zone-scoped DNS edit permission.
+4. Create Cloudflare API Token with zone-scoped DNS edit permission only.
 5. Issue certificate.
 6. Enable Cloudflare Full (strict).
 7. Create one HTTP site or one stream proxy.
@@ -486,7 +537,7 @@ Use this order:
 
 ---
 
-## 18. Reference links
+## 19. Reference links
 
 - Cloudflare Create API Token: https://developers.cloudflare.com/fundamentals/api/get-started/create-token/
 - Certbot DNS Cloudflare plugin: https://certbot-dns-cloudflare.readthedocs.io/en/stable/
