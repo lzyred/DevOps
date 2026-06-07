@@ -3,11 +3,17 @@ set -Eeuo pipefail
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck source=lib/common.sh
 source "${BASE_DIR}/lib/common.sh"
+# shellcheck source=modules/core_nginx.sh
 source "${BASE_DIR}/modules/core_nginx.sh"
+# shellcheck source=modules/cert_cloudflare.sh
 source "${BASE_DIR}/modules/cert_cloudflare.sh"
+# shellcheck source=modules/cf_real_ip.sh
 source "${BASE_DIR}/modules/cf_real_ip.sh"
+# shellcheck source=modules/http_site.sh
 source "${BASE_DIR}/modules/http_site.sh"
+# shellcheck source=modules/stream_proxy.sh
 source "${BASE_DIR}/modules/stream_proxy.sh"
 
 usage() {
