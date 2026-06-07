@@ -42,7 +42,7 @@ nginx_http_site_create() {
 
   validate_domain "${domain}"
   validate_domain "${cert_name}"
-  reject_nginx_injection_chars "${client_max_body_size}" "client_max_body_size"
+  validate_size "${client_max_body_size}"
 
   if [[ -n "${upstream}" ]]; then
     validate_url "${upstream}"
