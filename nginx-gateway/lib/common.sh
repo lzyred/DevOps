@@ -25,7 +25,7 @@ backup_file() {
   local file="$1"
 
   if [[ -f "${file}" ]]; then
-    cp -a "${file}" "${file}.bak.$(date +%Y%m%d%H%M%S)"
+    cp -a "${file}" "${file}.bak.$(date +%Y%m%d%H%M%S).$$"
   fi
 }
 
@@ -43,7 +43,7 @@ safe_apply_nginx_conf() {
   local dest_dir
   local tmp
   local backup=""
-  local had_old="false"
+  local had_old=false
 
   [[ -n "${dest}" ]] || die "safe_apply_nginx_conf requires destination path"
   validate_abs_path "${dest}"
@@ -56,29 +56,44 @@ safe_apply_nginx_conf() {
   chmod 0644 "${tmp}"
 
   if [[ -f "${dest}" ]]; then
-    had_old="true"
-    backup="$(mktemp /tmp/nginx-gateway-backup.XXXXXX)"
+    had_old=true
+    backup="${dest}.bak.$(date +%Y%m%d%H%M%S).$$"
     cp -a "${dest}" "${backup}"
   fi
 
   install -m 0644 "${tmp}" "${dest}"
 
   if ! nginx_test; then
-    warn "nginx -t failed after writing ${dest}; rolling back."
+    warn "nginx -t failed after writing ${dest}; rolling back to previous config."
 
-    if [[ "${had_old}" == "true" ]]; then
+    if [[ "${had_old}" == true ]]; then
       install -m 0644 "${backup}" "${dest}"
     else
       rm -f "${dest}"
     fi
 
-    rm -f "${tmp}" "${backup}"
+    rm -f "${tmp}"
     nginx_test >/dev/null 2>&1 || true
     die "Rejected invalid Nginx config: ${dest}"
   fi
 
-  systemctl reload nginx
-  rm -f "${tmp}" "${backup}"
+  if ! systemctl reload nginx; then
+    warn "Nginx reload failed after writing ${dest}; rolling back to previous config."
+
+    if [[ "${had_old}" == true ]]; then
+      install -m 0644 "${backup}" "${dest}"
+      nginx_test >/dev/null 2>&1 || true
+      systemctl reload nginx >/dev/null 2>&1 || true
+    else
+      rm -f "${dest}"
+      nginx_test >/dev/null 2>&1 || true
+    fi
+
+    rm -f "${tmp}"
+    die "Rejected config because Nginx reload failed: ${dest}"
+  fi
+
+  rm -f "${tmp}"
 }
 
 sanitize_nginx_name() {
@@ -101,7 +116,7 @@ reject_nginx_injection_chars() {
   local label="${2:-value}"
 
   case "${value}" in
-    *$'\n'*|*$'\r'*|*';'*|'{'*|'}'*|'`'*)
+    *$'\n'*|*$'\r'*|*';'*|*'{'*|*'}'*|*'`'*)
       die "Invalid ${label}: contains forbidden Nginx control characters"
       ;;
   esac
@@ -134,6 +149,13 @@ validate_abs_path() {
   local value="$1"
   reject_nginx_injection_chars "${value}" "path"
   [[ "${value}" == /* ]] || die "Path must be absolute: ${value}"
+  [[ ! "${value}" =~ [[:space:]] ]] || die "Path must not contain whitespace: ${value}"
+}
+
+validate_size() {
+  local value="$1"
+  reject_nginx_injection_chars "${value}" "size"
+  [[ "${value}" =~ ^(0|[1-9][0-9]*[kKmMgG]?)$ ]] || die "Invalid size value: ${value}"
 }
 
 validate_port() {
